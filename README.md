@@ -18,6 +18,18 @@ A single-HTML VTuber recorder that runs entirely in your browser.
 
 ---
 
+## Sample Images
+
+3 sample images are included — try them right away.
+
+<p align="left">
+  <img src="sample_close.png" width="180">
+  <img src="sample_open.png" width="180">
+  <img src="sample_blink.png" width="180">
+</p>
+
+---
+
 ## Quick Start
 
 1. **Create your character** — Use ChatGPT, Midjourney, or any tool to generate a PNG character image.
