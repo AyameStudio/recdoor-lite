@@ -4,8 +4,6 @@
 
 A single-HTML VTuber recorder that runs entirely in your browser.
 
-# 🌸 Recdoor Lite
-
 <p align="left">
   <img src="screenshot.png" width="300">
 </p>
