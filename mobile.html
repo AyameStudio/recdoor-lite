@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0b0b10">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Recdoor Lite</title>
+
+<!--
+  Recdoor Lite (Mobile) — HTML 1枚のスマホ専用 PNGTuber/Vtuber レコーダー
+  画面中心線に沿って上から下へ:  立ち絵を追加 → マイクを追加 → 録画(下端の赤ボタン)
+  上メニュー: 立ち絵差し替え・背景・反転・縦横・言語 (小さく)。録画中は全メニュー無効。
+  立ち絵 1枚=呼吸 / 2枚=口パク / 3枚=+まばたき。iOSはMP4録画・保存はWeb Share。https:// で開く。
+-->
+
+<style>
+  :root{
+    --bg:#0b0b10; --surface:rgba(18,18,26,.74); --surface-solid:#14141c;
+    --stroke:rgba(255,255,255,.10); --stroke-strong:rgba(255,255,255,.18);
+    --ink:#f3f3f8; --ink-dim:#9a9aa8;
+    --accent:#a594ff; --accent-strong:#7c6be8; --ready:#4fd08a; --rec:#ff4d5e; --rec-deep:#e23a4b; --warn:#e6b25c;
+    --safe-b:env(safe-area-inset-bottom,0px); --safe-t:env(safe-area-inset-top,0px);
+    --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue","Hiragino Sans","Noto Sans JP",sans-serif;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--font);overscroll-behavior:none;}
+  body{overflow:hidden;}
+
+  #stage{position:fixed;inset:0;height:100dvh;display:flex;align-items:center;justify-content:center;background:#08080c;}
+  /* キャンバス=録画範囲。外周に枠線を付けて、縦/横の範囲を可視化(枠線はCSSなので録画には入らない) */
+  #rec{max-width:calc(100% - 10px);max-height:calc(100dvh - 10px);touch-action:none;display:block;
+    border:2px solid rgba(255,255,255,.4);border-radius:5px;box-shadow:0 0 0 1px rgba(0,0,0,.5),0 12px 44px rgba(0,0,0,.55);
+    background:
+      linear-gradient(45deg,#15151f 25%,transparent 25%,transparent 75%,#15151f 75%),
+      linear-gradient(45deg,#15151f 25%,#0f0f17 25%,#0f0f17 75%,#15151f 75%);
+    background-size:26px 26px;background-position:0 0,13px 13px;}
+
+  #secWarn{position:fixed;left:0;right:0;top:0;z-index:80;display:none;
+    padding:calc(var(--safe-t) + 10px) 16px 10px;background:rgba(60,44,14,.96);color:var(--warn);
+    border-bottom:1px solid var(--warn);font:600 13px/1.45 var(--font);text-align:center;}
+
+  /* ===== 上メニュー(補助): 立ち絵差し替え・背景・反転 / 縦横・言語 ===== */
+  #topmenu{position:fixed;left:0;right:0;top:0;z-index:30;display:flex;justify-content:space-between;align-items:flex-start;
+    gap:10px;padding:calc(var(--safe-t) + 10px) 12px 0;pointer-events:none;}
+  #topmenu > *{pointer-events:auto;}
+  #topmenu.locked{pointer-events:none;opacity:.4;filter:grayscale(.4);}   /* 録画中は無効 */
+  .mgroup{display:flex;gap:7px;}
+  .mchip{display:inline-flex;flex-direction:column;align-items:center;gap:4px;min-width:46px;padding:7px 8px;border-radius:13px;
+    border:1px solid var(--stroke);background:var(--surface);color:var(--ink-dim);cursor:pointer;position:relative;text-align:center;
+    font:600 10px/1 var(--font);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);}
+  .mchip .mi{width:22px;height:20px;display:flex;align-items:center;justify-content:center;font-size:16px;line-height:1;}
+  .mchip .mi svg{width:19px;height:19px;display:block;}
+  .mchip:active{transform:scale(.94);}
+  .mchip.active{border-color:var(--accent);background:rgba(165,148,255,.16);color:#fff;}
+  .mchip.done{border-color:var(--ready);color:#fff;}
+  .mchip .x{position:absolute;top:-5px;right:-5px;width:19px;height:19px;border-radius:50%;background:var(--rec-deep);color:#fff;font:700 10px/19px var(--font);text-align:center;display:none;z-index:2;}
+  .mchip.active .x{display:block;}
+  .mchip .ok{position:absolute;top:-5px;right:-5px;width:19px;height:19px;border-radius:50%;background:var(--ready);color:#0b0b10;font:800 11px/19px var(--font);text-align:center;display:none;z-index:2;}
+  .mchip.done .ok{display:block;}
+  .ratio{display:inline-block;border:2px solid currentColor;border-radius:2px;}
+  .ratio.v{width:12px;height:17px;}
+  .ratio.h{width:17px;height:12px;}
+
+  #recBadge{position:fixed;left:50%;top:calc(var(--safe-t) + 14px);transform:translateX(-50%);z-index:31;
+    display:none;align-items:center;gap:8px;background:var(--rec-deep);color:#fff;
+    font:800 15px/1 var(--font);letter-spacing:.12em;padding:8px 14px;border-radius:999px;box-shadow:0 6px 20px rgba(226,58,75,.45);}
+  #recBadge.show{display:inline-flex;}
+  #recBadge .dot{width:9px;height:9px;border-radius:50%;background:#fff;animation:blink 1s steps(1,end) infinite;}
+  @keyframes blink{50%{opacity:.15;}}
+  #recBadge .time{font-variant-numeric:tabular-nums;letter-spacing:.06em;}
+
+  /* ===== 中心線フロー: 立ち絵→マイク→録画 (下端アンカー) ===== */
+  #flow{position:fixed;left:0;right:0;bottom:calc(var(--safe-b) + 20px);z-index:35;
+    display:flex;flex-direction:column;align-items:center;gap:9px;pointer-events:none;}
+  #flow > *{pointer-events:auto;}
+
+  /* ステップの帯(立ち絵・マイク) */
+  .step{display:inline-flex;align-items:center;gap:10px;min-width:190px;justify-content:center;
+    padding:13px 20px;border-radius:16px;border:1px solid var(--stroke-strong);background:var(--surface);
+    color:var(--ink);font:700 15px/1 var(--font);cursor:pointer;text-align:center;position:relative;
+    -webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px);box-shadow:0 8px 26px rgba(0,0,0,.4);}
+  .step .sti{width:26px;height:24px;display:flex;align-items:center;justify-content:center;font-size:20px;color:var(--accent);flex:0 0 auto;}
+  .step .stcol{display:flex;flex-direction:column;align-items:flex-start;gap:3px;}
+  .step .stmain{font:700 15px/1 var(--font);}
+  .step .stsub{font:500 10.5px/1.25 var(--font);color:var(--ink-dim);}
+  #stepArt .stsub{color:rgba(255,255,255,.75);}
+  .step .sti svg{width:23px;height:23px;display:block;}
+  .step:active{transform:scale(.98);}
+  /* 立ち絵ステップ = 最初の主役: アクセント塗り+脈動 */
+  #stepArt{background:var(--accent-strong);border-color:transparent;color:#fff;animation:steppulse 1.7s ease-out infinite;}
+  #stepArt .sti{color:#fff;}
+  @keyframes steppulse{0%,100%{box-shadow:0 8px 26px rgba(0,0,0,.4),0 0 0 0 rgba(165,148,255,.5);}70%{box-shadow:0 8px 26px rgba(0,0,0,.4),0 0 0 12px rgba(165,148,255,0);}}
+  /* マイクステップの状態 */
+  #stepMic.dim{opacity:.4;pointer-events:none;}                       /* 立ち絵前 */
+  #stepMic.pulse{background:var(--accent-strong);border-color:transparent;color:#fff;animation:steppulse 1.7s ease-out infinite;}
+  #stepMic.pulse .sti{color:#fff;}
+  #stepMic.on{pointer-events:none;border-color:var(--ready);}          /* オン=声で揺れる, 押せない(ミュートなし) */
+  .micwrap{display:flex;align-items:center;gap:6px;height:24px;}
+  .micwrap .mici{font-size:19px;line-height:1;}
+  .bars{display:none;align-items:flex-end;gap:3px;height:20px;}
+  .bars .b{width:4px;border-radius:2px;background:var(--ready);transition:height .06s linear;}
+  #stepMic .steptxt{font:700 15px/1 var(--font);}
+  #stepMic.on .steptxt{display:none;}
+  #stepMic.on .bars{display:inline-flex;}
+
+  /* 下向き矢印(流れ) */
+  .arrow{display:flex;flex-direction:column;align-items:center;gap:5px;}
+  .arrow .line{width:2px;height:15px;border-radius:2px;background:var(--stroke-strong);}
+  .arrow.ready .line{background:var(--rec);}
+  #readyLabel{display:none;font:800 16px/1 var(--font);color:var(--rec);letter-spacing:.04em;background:rgba(8,8,12,.85);padding:6px 14px;border-radius:999px;border:1.5px solid rgba(255,255,255,.6);box-shadow:0 4px 14px rgba(0,0,0,.45);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);}
+  #readyLabel.show{display:inline-block;}
+
+  /* 録画ボタン(下端・赤・主役) */
+  .shutter{width:84px;height:84px;border-radius:50%;border:none;background:transparent;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;position:relative;margin-top:2px;}
+  .shutter:disabled{opacity:.4;}
+  .shutter .sring{position:absolute;inset:0;border-radius:50%;border:4px solid rgba(255,255,255,.9);transition:border-color .2s;}
+  .shutter .score{width:66px;height:66px;border-radius:50%;background:var(--rec);transition:width .18s,height .18s,border-radius .18s;box-shadow:0 4px 14px rgba(255,77,94,.55);}
+  .shutter:not(:disabled):active .score{width:60px;height:60px;}
+  .shutter.go{animation:shpulse 1.5s ease-out infinite;border-radius:50%;}
+  @keyframes shpulse{0%,100%{box-shadow:0 0 0 0 rgba(255,77,94,.5);}70%{box-shadow:0 0 0 14px rgba(255,77,94,0);}}
+  .shutter.recording .sring{border-color:var(--rec);animation:recpulse 1.4s ease-in-out infinite;}
+  .shutter.recording .score{width:28px;height:28px;border-radius:7px;}
+  @keyframes recpulse{50%{box-shadow:0 0 0 8px rgba(255,77,94,.18);}}
+
+  #cd{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:40;
+    font:800 150px/1 var(--font);color:#fff;text-shadow:0 6px 30px rgba(0,0,0,.6);pointer-events:none;}
+  #cd.show{display:flex;animation:pop .3s ease;}
+  @keyframes pop{from{transform:scale(.6);opacity:0;}to{transform:scale(1);opacity:1;}}
+
+  #scrim{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;opacity:0;pointer-events:none;transition:opacity .2s;}
+  #scrim.show{opacity:1;pointer-events:auto;}
+  .sheet{position:fixed;left:0;right:0;bottom:0;z-index:60;background:var(--surface-solid);
+    border-top-left-radius:24px;border-top-right-radius:24px;border-top:1px solid var(--stroke);
+    padding:10px 20px calc(var(--safe-b) + 22px);transform:translateY(110%);transition:transform .26s cubic-bezier(.22,.61,.36,1);
+    max-height:88dvh;overflow:auto;box-shadow:0 -20px 60px rgba(0,0,0,.5);}
+  .sheet.show{transform:translateY(0);}
+  .grabber{width:40px;height:5px;border-radius:3px;background:var(--stroke-strong);margin:6px auto 14px;}
+  .sheetclose{position:absolute;top:12px;right:14px;width:34px;height:34px;border-radius:50%;border:1px solid var(--stroke);background:rgba(255,255,255,.06);color:var(--ink);font:600 15px/1 var(--font);cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:2;}
+  .sheetclose:active{transform:scale(.92);}
+  .sheet h2{margin:0 0 4px;font:700 18px/1.3 var(--font);}
+  .sheet .hint{margin:0 0 16px;font:400 13px/1.5 var(--font);color:var(--ink-dim);}
+  #resultVideo{width:100%;border-radius:16px;background:#000;max-height:52dvh;display:block;margin-bottom:16px;}
+  .primary{width:100%;padding:16px;border-radius:14px;border:none;background:var(--accent-strong);color:#fff;font:700 16px/1 var(--font);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;}
+  .primary:active{transform:scale(.98);}
+  .ghost{width:100%;padding:14px;margin-top:10px;border-radius:14px;border:1px solid var(--stroke);background:transparent;color:var(--ink-dim);font:600 15px/1 var(--font);cursor:pointer;}
+
+  #toast{position:fixed;left:50%;bottom:calc(var(--safe-b) + 210px);transform:translateX(-50%) translateY(10px);
+    background:rgba(20,20,28,.96);color:var(--ink);border:1px solid var(--stroke-strong);border-radius:14px;padding:11px 16px;
+    font:600 14px/1.3 var(--font);text-align:center;max-width:80%;z-index:70;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;box-shadow:0 12px 40px rgba(0,0,0,.5);}
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+
+  @media (prefers-reduced-motion: reduce){*{animation:none !important;transition:none !important;}}
+</style>
+</head>
+<body>
+
+<div id="secWarn"></div>
+<div id="stage"><canvas id="rec" width="720" height="1280"></canvas></div>
+
+<div id="topmenu">
+  <div class="mgroup">
+    <button class="mchip" id="mArt" type="button"><span class="mi"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="7.6" r="4"/><path d="M4.5 20.5c0-4.2 3.4-7.3 7.5-7.3s7.5 3.1 7.5 7.3z"/></svg></span><span data-i18n="tArt"></span><span class="ok" id="mArtOk">&#10003;</span></button>
+    <button class="mchip" id="mFlip" type="button"><span class="mi"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="11" y="4" width="2" height="16" opacity=".4"/><path d="M9 8.5 4 12l5 3.5z"/><path d="M15 8.5 20 12l-5 3.5z"/></svg></span><span data-i18n="tFlip"></span></button>
+    <button class="mchip" id="mBg" type="button"><span class="mi">&#127748;</span><span data-i18n="tBg"></span><span class="x" id="bgX">&#10005;</span></button>
+  </div>
+  <div class="mgroup">
+    <button class="mchip" id="mAsp" type="button"><span class="mi"><span class="ratio v" id="aspBox"></span></span><span id="aspLbl"></span></button>
+    <button class="mchip" id="mLang" type="button"><span class="mi">&#127760;</span><span id="langLbl"></span></button>
+  </div>
+</div>
+
+<div id="recBadge"><span class="dot"></span><span>REC</span><span class="time" id="recTime">0:00</span></div>
+
+<div id="flow">
+  <button class="step" id="stepArt" type="button">
+    <span class="sti"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="7.6" r="4"/><path d="M4.5 20.5c0-4.2 3.4-7.3 7.5-7.3s7.5 3.1 7.5 7.3z"/></svg></span>
+    <span class="stcol"><span class="stmain" data-i18n="stepArt"></span><span class="stsub" data-i18n="stepArtSub"></span></span>
+  </button>
+  <div class="arrow" id="arrowArt"><span class="line"></span></div>
+  <button class="step" id="stepMic" type="button">
+    <span class="steptxt" data-i18n="stepMic"></span><span class="micwrap"><span class="mici" id="micIcon">&#127908;</span><span class="bars" id="micBars"><span class="b"></span><span class="b"></span><span class="b"></span><span class="b"></span><span class="b"></span><span class="b"></span></span></span>
+  </button>
+  <div class="arrow" id="arrowMic"><span class="line"></span></div>
+  <div class="rl" id="readyLabel"></div>
+  <button class="shutter" id="recBtn" type="button" disabled aria-label="record"><span class="sring"></span><span class="score"></span></button>
+</div>
+
+<div id="cd"></div>
+
+<div id="scrim"></div>
+<div class="sheet" id="result">
+  <button class="sheetclose" id="closeResult" type="button" aria-label="close">&#10005;</button>
+  <div class="grabber"></div>
+  <h2 data-i18n="resTitle"></h2>
+  <p class="hint" id="resHint"></p>
+  <video id="resultVideo" playsinline controls></video>
+  <button class="primary" id="saveBtn" type="button"><span>&#128229;</span><span data-i18n="save"></span></button>
+</div>
+
+<div id="toast"></div>
+
+<script>
+/* ===================== i18n ===================== */
+const LANGS=['en','ja','zh','es'];
+const LANGLBL={en:'EN',ja:'日本語',zh:'中文',es:'ES'};
+const I18N={
+  en:{ stepArt:'Add character art', stepArtSub:'1–3 images (2 = lip-sync, 3 = + blink)', stepMic:'Enable mic', ready:'Ready to record',
+    tArt:'Art', tBg:'Background', tFlip:'Flip', vertical:'Vertical', horizontal:'Horizontal',
+    hintGesture:'Adjust size with your fingers',
+    resTitle:'Your clip', resHint:'Tap save to keep it or share it.', save:'Save', retake:'Record again',
+    confirmClose:'Close without saving?', micErr:'Allow mic in browser settings',
+    leaveWarn:'Recording stops if you leave the app',
+    insecure:'⚠ The mic needs https:// — this page isn’t secure, so recording won’t work here.' },
+  ja:{ stepArt:'立ち絵を追加', stepArtSub:'1〜3枚（2枚で口パク・3枚でまばたき）', stepMic:'マイク有効化', ready:'録画準備OK',
+    tArt:'立ち絵', tBg:'背景', tFlip:'反転', vertical:'縦', horizontal:'横',
+    hintGesture:'指で大きさ調整',
+    resTitle:'録画できました', resHint:'保存を押すと、写真に保存やシェアができます。', save:'保存', retake:'もう一度',
+    confirmClose:'保存せずに閉じますか？', micErr:'ブラウザ設定でマイク許可してね',
+    leaveWarn:'アプリを離れると録画は止まります',
+    insecure:'⚠ マイクには https:// が必要です。今のページは安全でないため、ここでは録画できません。' },
+  zh:{ stepArt:'添加立绘', stepArtSub:'1〜3 张（2 张对口型，3 张眨眼）', stepMic:'启用麦克风', ready:'录屏准备好了！',
+    tArt:'立绘', tBg:'背景', tFlip:'翻转', vertical:'竖屏', horizontal:'横屏',
+    hintGesture:'用手指调整大小',
+    resTitle:'录制完成', resHint:'点击保存即可存到相册或分享。', save:'保存', retake:'再录一次',
+    confirmClose:'不保存就关闭吗？', micErr:'请在浏览器设置中允许麦克风',
+    leaveWarn:'离开应用会停止录制',
+    insecure:'⚠ 麦克风需要 https://。当前页面不安全，无法在此录制。' },
+  es:{ stepArt:'Añade tu personaje', stepArtSub:'1–3 imágenes (2 = labios, 3 = parpadeo)', stepMic:'Activar micrófono', ready:'Listo para grabar',
+    tArt:'Arte', tBg:'Fondo', tFlip:'Voltear', vertical:'Vertical', horizontal:'Horizontal',
+    hintGesture:'Ajusta el tamaño con los dedos',
+    resTitle:'Tu clip', resHint:'Pulsa guardar para conservarlo o compartirlo.', save:'Guardar', retake:'Grabar otra vez',
+    confirmClose:'¿Cerrar sin guardar?', micErr:'Permite el micro en los ajustes del navegador',
+    leaveWarn:'La grabación se detiene si sales de la app',
+    insecure:'⚠ El micrófono necesita https://. Esta página no es segura y aquí no se puede grabar.' },
+};
+function detectLang(){const n=(navigator.language||'en').toLowerCase();if(n.startsWith('ja'))return'ja';if(n.startsWith('zh'))return'zh';if(n.startsWith('es'))return'es';return'en';}
+let LANG=detectLang();
+const t=k=>(I18N[LANG][k]!==undefined?I18N[LANG][k]:I18N.en[k]);
+function applyLang(){
+  document.documentElement.lang=LANG;
+  document.querySelectorAll('[data-i18n]').forEach(el=>{const v=t(el.getAttribute('data-i18n'));if(typeof v==='string')el.innerHTML=v;});
+  langLbl.textContent=LANGLBL[LANG];
+  refreshAspect(); render(); refreshSecWarn();
+}
+
+/* ===================== 要素 ===================== */
+const $=id=>document.getElementById(id);
+const secWarn=$('secWarn'), cv=$('rec'), cx=cv.getContext('2d');
+const topmenu=$('topmenu');
+const mArt=$('mArt'), mArtOk=$('mArtOk'), mBg=$('mBg'), bgX=$('bgX'), mFlip=$('mFlip'), mAsp=$('mAsp'), aspBox=$('aspBox'), aspLbl=$('aspLbl'), mLang=$('mLang'), langLbl=$('langLbl');
+const recBadge=$('recBadge'), recTime=$('recTime'), cdEl=$('cd');
+const stepArt=$('stepArt'), arrowArt=$('arrowArt'), stepMic=$('stepMic'), micIcon=$('micIcon'), micBars=$('micBars'), arrowMic=$('arrowMic'), readyLabel=$('readyLabel'), recBtn=$('recBtn');
+const scrim=$('scrim'), resultSheet=$('result'), resultVideo=$('resultVideo'), resHint=$('resHint');
+const saveBtn=$('saveBtn'), closeResult=$('closeResult'), toast=$('toast');
+
+
+/* ===================== 立ち絵・背景 ===================== */
+let imgs=[], bounceMode=true, bgImg=null, bgReady=false, bgOn=false, gestureHintShown=false;
+function pickOrder(files){
+  const arr=[...files]; const by=k=>arr.find(f=>f.name.toLowerCase().includes(k));
+  const c=by('close'),o=by('open'),b=by('blink');
+  if(c||o||b){const rest=arr.filter(f=>f!==c&&f!==o&&f!==b);return[c||rest.shift(),o||rest.shift(),b||rest.shift()].filter(Boolean);}
+  return arr.slice(0,3);
+}
+function loadImage(file){return new Promise((res,rej)=>{const im=new Image();im.onload=()=>res(im);im.onerror=rej;im.src=URL.createObjectURL(file);});}
+async function setAvatars(files){
+  const list=pickOrder([...files].filter(f=>f.type.startsWith('image/')));
+  if(!list.length)return;
+  try{imgs=await Promise.all(list.map(loadImage));}catch(e){return;}
+  bounceMode=imgs.length<2; mArt.classList.add('done'); mFlip.classList.remove('locked'); render();
+  if(!gestureHintShown){gestureHintShown=true;showToast(t('hintGesture'));}
+}
+async function setBackground(file){
+  if(!file)return;
+  try{bgImg=await loadImage(file);}catch(e){return;}
+  bgReady=true; bgOn=true; mBg.classList.add('active');
+}
+
+
+bgX.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();bgOn=false;mBg.classList.remove('active');});
+
+/* ファイル選択: 毎回新しい input を作って確実に change を拾う */
+function pickFiles(accept,multiple,cb){
+  const inp=document.createElement('input');
+  inp.type='file'; inp.accept=accept; if(multiple)inp.multiple=true;
+  inp.style.cssText='position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none;';
+  document.body.appendChild(inp);
+  inp.addEventListener('change',()=>{cb(inp.files);inp.remove();},{once:true});
+  // 一部端末で cancel 時に残らないよう保険
+  window.addEventListener('focus',()=>{setTimeout(()=>{if(document.body.contains(inp))inp.remove();},500);},{once:true});
+  inp.click();
+}
+stepArt.addEventListener('click',()=>pickFiles('image/*',true,f=>setAvatars(f)));
+mArt.addEventListener('click',()=>pickFiles('image/*',true,f=>setAvatars(f)));
+mBg.addEventListener('click',()=>pickFiles('image/*',false,f=>setBackground(f[0])));
+
+
+/* ===================== 反転・向き・言語 ===================== */
+let posX=0.5, sizePct=85, flipped=false, isVertical=true;
+function setPosX(v){posX=Math.max(0,Math.min(1,v));}
+function setSize(v){sizePct=Math.max(20,Math.min(100,Math.round(v)));}
+mFlip.addEventListener('click',()=>{if(recorder)return;flipped=!flipped;mFlip.classList.toggle('active',flipped);});
+function refreshAspect(){aspBox.className='ratio '+(isVertical?'v':'h');aspLbl.textContent=isVertical?t('vertical'):t('horizontal');}
+function setAspect(vertical){
+  if(recorder)return;
+  isVertical=vertical;
+  if(vertical){cv.width=720;cv.height=1280;}else{cv.width=1280;cv.height=720;}
+  cv.style.aspectRatio=cv.width+' / '+cv.height;   // 枠が正しい縦横比で出るよう明示
+  refreshAspect();
+}
+mAsp.addEventListener('click',()=>setAspect(!isVertical));
+mLang.addEventListener('click',()=>{LANG=LANGS[(LANGS.indexOf(LANG)+1)%LANGS.length];applyLang();});
+
+/* ===================== マイクと口 ===================== */
+let ctx=null,analyser=null,buf=null,recDest=null,micGain=null,running=false;
+const threshold=0.04,HOLD=4; let isOpen=false,blinking=false,hold=0;
+async function enableMic(){
+  if(!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)){refreshSecWarn();showToast(t('micErr'));return;}
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+    if(!ctx){
+      ctx=new (window.AudioContext||window.webkitAudioContext)();
+      analyser=ctx.createAnalyser();analyser.fftSize=512;buf=new Float32Array(analyser.fftSize);
+      recDest=ctx.createMediaStreamDestination();micGain=ctx.createGain();
+      micGain.connect(analyser);micGain.connect(recDest);
+    }
+    await ctx.resume();
+    ctx.createMediaStreamSource(stream).connect(micGain);
+    micGain.gain.value=1;
+    if(!running){running=true;tick();}
+    render();
+  }catch(err){showToast(t('micErr'));}
+}
+function tick(){
+  analyser.getFloatTimeDomainData(buf);
+  let sum=0;for(let i=0;i<buf.length;i++)sum+=buf[i]*buf[i];
+  const rms=Math.sqrt(sum/buf.length);
+  // マイクオン表示: 音声バーが声で跳ねる
+  const bars=micBars.children;
+  for(let i=0;i<bars.length;i++){
+    const h=Math.max(4, Math.min(20, rms*160*(0.6+Math.random()*0.8)));
+    bars[i].style.height=h.toFixed(1)+'px';
+  }
+  const on=rms>threshold;if(on)hold=HOLD;else if(hold>0)hold--;
+  const open=on||hold>0;if(open!==isOpen){isOpen=open;if(open&&blinking)endBlink();}
+  requestAnimationFrame(tick);
+}
+stepMic.addEventListener('click',()=>{if(!imgs.length)return;if(!running)enableMic();});
+
+let blinkTimer=null;
+function endBlink(){clearTimeout(blinkTimer);blinking=false;scheduleBlink();}
+function scheduleBlink(delay){
+  clearTimeout(blinkTimer);
+  blinkTimer=setTimeout(()=>{
+    if(!imgs[2]||bounceMode){scheduleBlink();return;}
+    if(isOpen){scheduleBlink(400);return;}
+    blinking=true;blinkTimer=setTimeout(endBlink,120);
+  },delay!=null?delay:2000+Math.random()*4000);
+}
+scheduleBlink();
+
+/* ===================== 描画 ===================== */
+const BREATHE_MS=3500;
+function avatarRect(){
+  const im=imgs.length?imgs[0]:null;if(!im||!im.naturalWidth)return null;
+  const W=cv.width,H=cv.height;
+  const base=isVertical?(H*(sizePct/100)/im.naturalHeight):Math.min(W*0.9/im.naturalWidth,H*(sizePct/100)/im.naturalHeight);
+  const w=im.naturalWidth*base,h=im.naturalHeight*base;
+  return{x:(W-w)*posX,y:H-h,w,h};
+}
+function drawFrame(){
+  const W=cv.width,H=cv.height;cx.clearRect(0,0,W,H);
+  if(bgOn&&bgReady&&bgImg){
+    const s=Math.max(W/bgImg.naturalWidth,H/bgImg.naturalHeight);
+    const w=bgImg.naturalWidth*s,h=bgImg.naturalHeight*s;cx.drawImage(bgImg,(W-w)/2,(H-h)/2,w,h);
+  }
+  const im=imgs.length?(bounceMode?imgs[0]:(blinking&&imgs[2])?imgs[2]:(isOpen&&imgs[1])?imgs[1]:imgs[0]):null;
+  if(im&&im.naturalWidth){
+    const p=(1-Math.cos(performance.now()/BREATHE_MS*Math.PI*2))/2;
+    const base=isVertical?(H*(sizePct/100)/im.naturalHeight):Math.min(W*0.9/im.naturalWidth,H*(sizePct/100)/im.naturalHeight);
+    const w=im.naturalWidth*base,h=im.naturalHeight*base*(1+0.018*p);
+    const x=(W-w)*posX,y=H-h;
+    if(flipped){cx.save();cx.translate(x+w,y);cx.scale(-1,1);cx.drawImage(im,0,0,w,h);cx.restore();}
+    else cx.drawImage(im,x,y,w,h);
+  }
+  requestAnimationFrame(drawFrame);
+}
+drawFrame();
+
+/* ===================== タッチ: ドラッグ移動 / ピンチ拡縮 ===================== */
+(function(){
+  function toCanvas(clientX,clientY){const r=cv.getBoundingClientRect();return{x:(clientX-r.left)/r.width*cv.width,y:(clientY-r.top)/r.height*cv.height};}
+  let moving=false,start=null;
+  function down(e){
+    if(!imgs.length||recorder)return;if(e.touches&&e.touches.length>=2)return;
+    const p=e.touches?e.touches[0]:e;const c=toCanvas(p.clientX,p.clientY);
+    const R=avatarRect();if(!R)return;
+    if(!(c.x>=R.x&&c.x<=R.x+R.w&&c.y>=R.y&&c.y<=R.y+R.h))return;
+    e.preventDefault();moving=true;start={cx:c.x,posX};
+    window.addEventListener('touchmove',move,{passive:false});window.addEventListener('touchend',up);
+  }
+  function move(e){
+    if(!moving)return;if(e.touches&&e.touches.length>=2)return;
+    const p=e.touches[0];const c=toCanvas(p.clientX,p.clientY);e.preventDefault();
+    const R=avatarRect();const span=cv.width-(R?R.w:0);if(span>0)setPosX(start.posX+(c.x-start.cx)/span);
+  }
+  function up(){moving=false;window.removeEventListener('touchmove',move);window.removeEventListener('touchend',up);}
+  cv.addEventListener('touchstart',down,{passive:false});
+  let pinch0=null;const dist=t=>Math.hypot(t[0].clientX-t[1].clientX,t[0].clientY-t[1].clientY);
+  cv.addEventListener('touchstart',e=>{if(recorder)return;if(e.touches.length===2)pinch0={d:dist(e.touches),s:sizePct};},{passive:false});
+  cv.addEventListener('touchmove',e=>{if(e.touches.length===2&&pinch0){e.preventDefault();setSize(pinch0.s*(dist(e.touches)/pinch0.d));}},{passive:false});
+  cv.addEventListener('touchend',e=>{if(e.touches.length<2)pinch0=null;});
+})();
+
+/* ===================== 状態→画面 (中心線フロー) ===================== */
+function render(){
+  const hasArt=imgs.length>0, hasMic=running, rec=!!recorder, ready=hasArt&&hasMic;
+  // 立ち絵ステップ: 立ち絵が入るまで / 録画中は非表示
+  const showArt=(!hasArt&&!rec);
+  stepArt.style.display=showArt?'':'none';
+  arrowArt.style.display=showArt?'':'none';
+  // マイクステップ: 録画中は非表示。状態(dim/pulse/on)を切替
+  const showMic=!rec;
+  stepMic.style.display=showMic?'':'none';
+  stepMic.classList.toggle('dim',!hasArt);
+  stepMic.classList.toggle('pulse',hasArt&&!hasMic);
+  stepMic.classList.toggle('on',hasMic);
+  // マイク→録画の矢印 / 準備OK
+  arrowMic.style.display=showMic?'':'none';
+  arrowMic.classList.toggle('ready',ready&&!rec);
+  readyLabel.textContent=t('ready');
+  readyLabel.classList.toggle('show',ready&&!rec);
+  // 録画ボタン
+  recBtn.disabled=!(ready||rec);
+  recBtn.classList.toggle('go',ready&&!rec);
+  // 上メニュー: 録画中は全無効
+  topmenu.classList.toggle('locked',rec);
+}
+
+/* ===================== 録画 ===================== */
+let recorder=null,chunks=[],chosenMime='',finalized=false,recStartTime=0,recTimer=null,wakeLock=null,lastFile=null,lastURL=null;
+function pickMime(){
+  for(const m of['video/mp4;codecs=h264,aac','video/mp4','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'])
+    if(window.MediaRecorder&&MediaRecorder.isTypeSupported(m))return m;
+  return'';
+}
+async function acquireWake(){try{if('wakeLock'in navigator)wakeLock=await navigator.wakeLock.request('screen');}catch(e){}}
+function releaseWake(){try{wakeLock&&wakeLock.release();}catch(e){}wakeLock=null;}
+function fmtTime(ms){const s=Math.floor(ms/1000);return Math.floor(s/60)+':'+String(s%60).padStart(2,'0');}
+function startTimer(){recTimer=setInterval(()=>{recTime.textContent=fmtTime(Date.now()-recStartTime);},500);}
+function beginRecordNow(){
+  const tracks=[...cv.captureStream(30).getVideoTracks()];
+  if(recDest)tracks.push(...recDest.stream.getAudioTracks());
+  chosenMime=pickMime();
+  const opt=chosenMime?{mimeType:chosenMime}:{};opt.videoBitsPerSecond=4000000;opt.audioBitsPerSecond=128000;
+  chunks=[];finalized=false;
+  try{recorder=new MediaRecorder(new MediaStream(tracks),opt);}catch(e){recorder=new MediaRecorder(new MediaStream(tracks));}
+  recorder.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data);};
+  recorder.onstop=()=>{finalize();};
+  recorder.start(1000);
+  acquireWake();recStartTime=Date.now();startTimer();
+  recBadge.classList.add('show');recBtn.classList.add('recording');recBtn.classList.remove('go');
+  render();showToast(t('leaveWarn'));
+}
+function runCountdown(n,done){
+  cdEl.classList.add('show');cdEl.textContent=n;
+  const step=()=>{n--;if(n<=0){cdEl.classList.remove('show');done();return;}cdEl.textContent=n;cdEl.style.animation='none';void cdEl.offsetWidth;cdEl.style.animation='pop .3s ease';setTimeout(step,1000);};
+  setTimeout(step,1000);
+}
+function stopRecording(){
+  if(!recorder||recorder.state==='inactive')return;
+  try{recorder.requestData();}catch(e){}
+  try{recorder.stop();}catch(e){}
+  setTimeout(()=>{if(!finalized)finalize();},1500);
+}
+function finalize(){
+  if(finalized)return;finalized=true;
+  clearInterval(recTimer);releaseWake();
+  recBadge.classList.remove('show');recBtn.classList.remove('recording');
+  const type=(recorder&&recorder.mimeType)||chosenMime||'video/webm';
+  const blob=new Blob(chunks,{type});chunks=[];recorder=null;
+  render();
+  if(!blob.size)return;
+  const ext=type.includes('mp4')?'mp4':'webm';
+  const d=new Date(),p=n=>String(n).padStart(2,'0');
+  const name='recdoor_'+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'_'+p(d.getHours())+p(d.getMinutes())+p(d.getSeconds())+'.'+ext;
+  if(lastURL)URL.revokeObjectURL(lastURL);
+  lastURL=URL.createObjectURL(blob);lastFile=new File([blob],name,{type});
+  resultVideo.src=lastURL;resHint.textContent=t('resHint');
+  openSheet(resultSheet);
+}
+recBtn.addEventListener('click',()=>{
+  if(recorder){stopRecording();return;}
+  if(!(imgs.length&&running))return;
+  runCountdown(2,beginRecordNow);
+});
+function openSheet(el){scrim.classList.add('show');el.classList.add('show');}
+function closeSheets(){scrim.classList.remove('show');resultSheet.classList.remove('show');}
+scrim.addEventListener('click',closeSheets);
+closeResult.addEventListener('click',()=>{if(confirm(t('confirmClose')))closeSheets();});
+function saveVideo(){   // 保存(ダウンロード)のみ。共有はしない
+  const a=document.createElement('a');a.href=lastURL;a.download=lastFile?lastFile.name:'sakura.webm';
+  document.body.appendChild(a);a.click();a.remove();
+}
+saveBtn.addEventListener('click',saveVideo);
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&recorder&&recorder.state!=='inactive')stopRecording();});
+
+/* ===================== その他 ===================== */
+let toastTimer=null;
+function showToast(msg){toast.textContent=msg;toast.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.classList.remove('show'),2400);}
+function refreshSecWarn(){
+  const insecure=!window.isSecureContext||!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia);
+  secWarn.style.display=insecure?'block':'none';
+  if(insecure)secWarn.textContent=t('insecure');
+}
+
+/* ===================== 初期化 ===================== */
+setAspect(true);
+applyLang();
+render();
+refreshSecWarn();
+</script>
+</body>
+</html>

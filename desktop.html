@@ -1,0 +1,1033 @@
+<meta charset="utf-8">
+<title>PNGTuber Lite</title>
+<!--
+  PNGTuber Lite  -  HTML 1枚だけで動く PNGTuber
+
+  使い方
+    1. このファイルを適当なフォルダに置く
+    2. そのフォルダで  python3 -m http.server 8000
+    3. ブラウザで  http://localhost:8000/
+    4. 立ち絵の画像をウィンドウにドラッグ＆ドロップ
+    5. 「マイク」を押して許可 → 喋る
+
+  ※ file:// で直接開くとマイクが使えません（ブラウザの制限）。
+     必ず http://localhost:8000/ から開いてください。
+
+  画像の枚数
+    1枚 … 喋ると上下に跳ねます
+    2枚 … 1枚目=閉じ口 / 2枚目=開き口 で口パク
+    3枚 … + 3枚目=目つぶり でまばたき
+    （ファイル名に close / open / blink が入っていればその順に割り当てます）
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #101014; overflow: hidden; }
+  #stage {
+    position: relative; display: flex; align-items: center; justify-content: center;
+    height: 100%; background: transparent;
+  }
+  /* canvas がプレビュー本体。録画されるものがそのまま見える（＝ズレない）。
+     アスペクト比は canvas の width/height が持つので、CSS は「はみ出さず最大」だけ指定。 */
+  #rec {
+    max-width: 96%; max-height: 96%;
+    object-fit: contain;
+    box-shadow: 0 0 0 1px rgba(255,255,255,.32);
+    background: transparent;
+    cursor: grab; touch-action: none;   /* ドラッグ操作を横取りされないように */
+  }
+  #rec:active { cursor: grabbing; }
+
+  #guide {
+    position: fixed; top: 0; bottom: 0; right: 0;
+    left: 300px;                 /* 左の操作パネルを避ける */
+    display: flex; align-items: center; justify-content: center;
+    text-align: center; pointer-events: none; z-index: 20;
+    opacity: 0; transition: opacity .2s;
+    padding: 16px;
+  }
+  @media (max-width: 640px) { #guide { left: 0; } }  /* モバイルは中央でよい */
+  #guide.show { opacity: 1; }
+  #guide.show .card { pointer-events: auto; cursor: pointer; }
+  #guide .card {
+    background: rgba(16,16,20,.86); border: 2px solid #9b8cff;
+    border-radius: 18px; padding: 38px 52px; max-width: 520px;
+    box-shadow: 0 0 0 1px rgba(155,140,255,.25), 0 10px 40px rgba(0,0,0,.5);
+    transition: background .15s;
+  }
+  #guide .card:hover { background: rgba(28,26,40,.92); }
+  #guide .step {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 50px; height: 50px; border-radius: 50%;
+    background: #9b8cff; color: #fff; font: bold 27px sans-serif;
+    margin-bottom: 17px;
+  }
+  #guide .msg { color: #f0f0f4; font: 500 27px/1.5 sans-serif; }
+  #guide .sub { color: #9a9aa8; font: 16px/1.6 sans-serif; margin-top: 11px; }
+
+  /* パネルは font-size を1つ持ち、中身はすべて em で相対指定する。
+     これで --uiScale を変えると文字・ボタン・余白・メーターが一斉に拡大縮小する。 */
+  #panel {
+    position: fixed; left: 12px; bottom: 12px;
+    font-size: calc(11px * var(--uiScale, 1));   /* ← ここが全体の基準 */
+    width: 21.5em;
+    padding: 0.8em 1em 0.9em;
+    background: rgba(30,30,38,.96); border: 1px solid #6e6e7e;
+    color: #d6d6de; font-family: sans-serif; line-height: 1.3;
+    border-radius: 0.9em; user-select: none;
+  }
+  #panel.hidden { display: none; }
+  #ttl {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 1.09em; font-weight: bold; color: #f0f0f4;
+    padding-bottom: 0.6em; margin-bottom: 0.7em; border-bottom: 1px solid #5c5c68;
+  }
+  #ttl span { font-weight: normal; font-size: 0.83em; color: #6d6d7a; }
+  #steps {
+    display: flex; align-items: center; justify-content: center; gap: 0.3em;
+    margin: 0.2em 0 0.7em; padding-bottom: 0.7em; border-bottom: 1px solid #5c5c68;
+  }
+  #steps .st { display: flex; align-items: center; gap: 0.3em; font-size: 0.82em; color: #9a9aa8; }
+  #steps .st i {
+    font-style: normal; font-weight: bold; font-size: 0.85em;
+    width: 1.5em; height: 1.5em; line-height: 1.5em; text-align: center;
+    border-radius: 50%; background: #4a4a56; color: #d2d2da;
+  }
+  /* 今のステップ: 光らせる */
+  #steps .st.active i { background: #9b8cff; color: #fff; }
+  #steps .st.active { color: #cfc8ff; }
+  /* 済んだステップ: ✓ + 緑 */
+  #steps .st.done i { background: #4caf7d; color: #fff; font-size: 0.9em; }
+  #steps .st.done { color: #8fd8b4; }
+  #steps .sarrow { color: #7a7a86; font-size: 0.9em; }
+  /* 右上角のリサイズグリップ（サイズは固定でよい） */
+  #grip {
+    position: absolute; top: 2px; right: 2px; width: 14px; height: 14px;
+    cursor: nesw-resize; opacity: .5; z-index: 5;
+    background:
+      linear-gradient(135deg, transparent 50%, #6d6d7a 50%, #6d6d7a 62%, transparent 62%,
+                      transparent 74%, #6d6d7a 74%, #6d6d7a 86%, transparent 86%);
+    border-top-right-radius: 0.9em;
+  }
+  #grip:hover { opacity: .9; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45em; margin-bottom: 0.55em; }
+  /* ① 立ち絵/背景の2ボタンは常に横並び。ボタンは元サイズ(内容ぴったりの自然幅)のまま。
+     長い訳語(スペイン語等)だけボタン内で折り返す */
+  .pair { flex: 1 1 100%; min-width: 0; display: flex; gap: 0.4em; }
+  .pair > .btn { width: auto; flex: 0 1 auto; min-width: 0; justify-content: center; white-space: normal; line-height: 1.2; padding: 0.35em 0.7em; }
+  .lb { flex: 0 0 2.7em; text-align: right; color: #9a9aa8; font-size: 0.9em; }
+  .lb.num {
+    flex: 0 0 1.5em; text-align: center; font-weight: bold; font-size: 1em;
+    color: #fff; background: #9b8cff; border-radius: 50%;
+    width: 1.5em; height: 1.5em; line-height: 1.5em; margin-right: 0.3em;
+  }
+  .btn.big { padding: 0.5em 1.1em; font-size: 1.05em; }
+  /* 位置ボタン: 小さめのピル、立ち絵ボタンと同じ左端にそろえる（立ち絵の直下・左寄せ） */
+  .btn.sm { padding: 0.2em 0.5em; font-size: 0.82em; }
+  .posrow { justify-content: flex-start; margin-left: 0; }
+  /* おまけの微調整ゾーン: ①②③より控えめに */
+  #tweaks { font-size: 0.86em; opacity: 0.9; margin: 0.2em 0 0.1em; }
+  #tweaks .btn { padding: 0.25em 0.5em; }
+  #tweaks label { margin-top: 0.35em; }
+  #tweaks input[type=range] { width: 10em; height: 3px; }
+  .lb.num.done { background: #4caf7d; }
+  .lb.num.dim  { background: #3a3a44; color: #7a7a86; }
+  .sep { height: 1px; background: #5c5c68; margin: 0.8em 0 0.7em; }
+  /* ①②③ を箱で囲ってグループを見せる */
+  .stepbox {
+    border: 1px solid #4a4a56; border-radius: 0.7em;
+    padding: 0.6em 0.7em; margin-bottom: 0.7em;
+    background: rgba(255,255,255,.015);
+    overflow: hidden; box-sizing: border-box;
+  }
+  .stepbox .row:last-child { margin-bottom: 0; }
+  .stepbox #tweaks { margin-bottom: 0; }
+  /* 今やる箱を光らせる（active）、済んだ箱は緑寄り（done） */
+  .stepbox.active { border-color: #9b8cff; box-shadow: 0 0 0 1px rgba(155,140,255,.3); }
+  .stepbox.done { border-color: #4caf7d55; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 0.35em; padding: 0.35em 0.7em;
+    border-radius: 0.55em; border: 1px solid #6e6e7e; background: rgba(255,255,255,.04);
+    color: #c6c6d0; font: 1em/1.2 sans-serif; cursor: pointer; white-space: nowrap;
+  }
+  .btn:hover:not(:disabled) { border-color: #5a5a68; color: #fff; }
+  .btn:disabled { opacity: .3; cursor: default; }
+  .btn .ic { font-size: 1em; opacity: .85; }
+  .btn.go { background: #6d5bd0; border-color: #6d5bd0; color: #fff; font-weight: bold;
+            box-shadow: 0 0 0 0 rgba(109,91,208,.5); animation: goglow 1.6s ease-in-out infinite; }
+  .btn.go:hover:not(:disabled) { background: #7d6be0; border-color: #7d6be0; }
+  @keyframes goglow { 50% { box-shadow: 0 0 0.85em 0.12em rgba(109,91,208,.75); } }
+  /* ③ 録画ボタンが「今やる」状態のときは紫で光らせる（①②と同じ合図に統一） */
+  .btn.rec.go { color: #fff; border-color: #6d5bd0; }
+  .btn.rec.go .ic { color: #fff; }
+  .btn.rec { color: #dd8f8f; border-color: #4a3339; }
+  .btn.rec:hover:not(:disabled) { border-color: #7d4a52; color: #ffb3b3; }
+  .btn.rec .ic { color: #e06060; opacity: 1; }
+  /* ② マイク・ミュート中の見た目（明るめの控えめ色で「今は切れている」と分かる） */
+  .btn.micoff { color: #e6b25c; border-color: #6a5330; background: rgba(230,178,92,.08); }
+  .btn.micoff:hover:not(:disabled) { border-color: #8a6d3b; color: #ffcf7a; }
+  .btn.tg::before { content:''; width:0.55em; height:0.55em; border-radius:50%; background:#43434e; flex:0 0 0.55em; }
+  .btn.tg.on::before { background: #5fc793; }
+  .btn.tg.on { color: #dfe8e3; border-color: #4f7a63; }
+  .btn.tg.off { color: #74747f; }
+  /* 紫の「今やる」プロンプト中は点を隠す（点の点灯＝認識中から始めて「今オンにした」感を出す） */
+  .btn.go.tg::before { display: none; }
+  #panel label { display: block; margin: 0.55em 0 0 0; color: #9a9aa8; font-size: 0.9em; }
+  #panel input[type=range] { width: 12.7em; vertical-align: middle; }
+  /* 大きさスライダー: 100%(最大)でつまみが右端で切れる / 桁数(78→100)で行がずれる のを防ぐ。
+     独立した行にして右に余白を残し、数値表示の幅を固定する。#tweaks #sz は2 id で上のルールに勝つ */
+  #szVal { display: inline-block; min-width: 2em; text-align: right; }
+  #tweaks label.szrow { white-space: nowrap; }
+  #tweaks #sz {
+    display: block; width: 13em; max-width: calc(100% - 0.9em);
+    height: 3px; margin: 0.3em 0 0.1em; vertical-align: middle; box-sizing: border-box;
+  }
+  #meter { position: relative; width: 12.7em; height: 0.64em; background: #2b2b34; border-radius: 0.36em; margin: 0.55em 0 0 3.2em; overflow: hidden; }
+  #bar { height: 100%; width: 0%; background: #5aa7d8; transition: background .05s; }
+  #bar.over { background: #5fc793; }
+  #mark { position: absolute; top: -1px; bottom: -1px; width: 2px; background: #e0e0e8; opacity: .9; pointer-events: none; }
+  #status { margin-top: 0.75em; color: #7fd4e8; font-size: 0.9em; line-height: 1.4; min-height: 1.5em; }
+  /* 録画中の臨場感バッジ（赤・点滅）。※canvasの外＝録画に写り込まない */
+  .reclive { display: inline-flex; align-items: center; gap: 0.4em; background: #cf3a3a; color: #fff;
+             font-weight: 800; font-size: 1.05em; letter-spacing: 0.12em; padding: 0.18em 0.7em;
+             border-radius: 1em; box-shadow: 0 0 0.55em rgba(207,58,58,.4); }
+  .reclive .dot { width: 0.6em; height: 0.6em; border-radius: 50%; background: #fff;
+                  animation: recblink 1s steps(1, end) infinite; }
+  @keyframes recblink { 50% { opacity: 0.15; } }
+  #langRow { margin-top: 0.65em; }
+  #cd {
+    position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+    font: bold 160px sans-serif; color: #fff; text-shadow: 0 0 30px #000, 0 4px 12px #000;
+    pointer-events: none; z-index: 50;
+  }
+  #cd.show { display: flex; }
+  #saved {
+    position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+    pointer-events: none; z-index: 55;
+  }
+  #saved.show { display: flex; animation: savedPop 1.8s ease forwards; }
+  #saved span {
+    background: rgba(24,40,32,.92); color: #8fe6b4;
+    border: 2px solid #4caf7d; border-radius: 16px;
+    padding: 20px 32px; font: bold 28px sans-serif;
+    box-shadow: 0 10px 40px rgba(0,0,0,.5);
+  }
+  @keyframes savedPop {
+    0% { opacity: 0; transform: scale(.9); }
+    12% { opacity: 1; transform: scale(1); }
+    80% { opacity: 1; }
+    100% { opacity: 0; }
+  }
+  #langRow select { font-size: 0.9em; padding: 0.1em 0.4em; border-radius: 0.45em; border: 1px solid #6e6e7e; background: #2c2c34; color: #c8c8d2; }
+</style>
+
+<div id="stage">
+  <canvas id="rec" width="1280" height="720"></canvas>
+</div>
+
+<div id="guide" class="show">
+    <div class="card">
+      <div class="step" id="guideStep">1</div>
+      <div class="msg" id="guideMsg"></div>
+      <div class="sub" id="guideSub"></div>
+    </div>
+  </div>
+<div id="cd"></div>
+<div id="saved"></div>
+
+<div id="panel">
+  <div id="ttl">PNGTuber Lite <span data-i18n="toggleHint"></span></div>
+  <div id="grip" title="drag to resize"></div>
+
+  <!-- 進捗: 3ステップだけで終わることを一目で示す -->
+  <div id="steps">
+    <div class="st" id="st1"><i>1</i><span data-i18n="stepAvatar"></span></div>
+    <div class="sarrow">→</div>
+    <div class="st" id="st2"><i>2</i><span data-i18n="stepMic"></span></div>
+    <div class="sarrow">→</div>
+    <div class="st" id="st3"><i>3</i><span data-i18n="stepRec"></span></div>
+  </div>
+
+  <!-- ① アバター（背景は任意・番号外） -->
+  <div class="stepbox" id="box1">
+    <div class="row">
+      <div class="lb num" id="num1">1</div>
+      <div class="pair">
+        <button class="btn" id="pickAv"><span class="ic">&#128100;</span><span data-i18n="avatar"></span></button>
+        <button class="btn tg off" id="pickBg"><span class="ic">&#127748;</span><span data-i18n="bg"></span></button>
+      </div>
+    </div>
+    <div id="tweaks">
+      <!-- 位置ボタンは立ち絵の直下に左寄せ（「位置」ラベルなし。立ち絵の位置だと位置で分かる） -->
+      <div class="row posrow">
+        <button class="btn tg off sm" id="posL" data-i18n="left"></button>
+        <button class="btn tg on sm"  id="posC" data-i18n="center"></button>
+        <button class="btn tg off sm" id="posR" data-i18n="right"></button>
+        <button class="btn tg off sm" id="flip" data-i18n="flip"></button>
+      </div>
+      <label class="szrow"><span data-i18n="size"></span> <span id="szVal">85</span>%
+        <input id="sz" type="range" min="20" max="100" step="1" value="85"></label>
+    </div>
+  </div>
+
+  <!-- ② マイク -->
+  <div class="stepbox" id="box2">
+    <div class="row">
+      <div class="lb num" id="num2">2</div>
+      <button class="btn tg" id="mic"><span class="ic">&#127908;</span><span data-i18n="mic"></span></button>
+    </div>
+    <div id="meter"><div id="bar"></div><div id="mark"></div></div>
+  </div>
+
+  <!-- ③ 録画 -->
+  <div class="stepbox" id="box3">
+    <div class="row">
+      <div class="lb num" id="num3">3</div>
+      <button class="btn rec big" id="recStart" disabled><span class="ic">&#9679;</span><span data-i18n="rec"></span></button>
+      <button class="btn" id="recStop" disabled><span class="ic">&#9632;</span><span data-i18n="stop"></span></button>
+    </div>
+    <div id="status"></div>
+  </div>
+
+  <div class="sep"></div>
+
+  <!-- 出力の向き -->
+  <div class="row">
+    <div class="lb" data-i18n="lblAspect"></div>
+    <button class="btn tg on"  id="aspH" data-i18n="landscape"></button>
+    <button class="btn tg off" id="aspV" data-i18n="portrait"></button>
+  </div>
+
+  <div id="langRow">
+    <select id="langSel">
+      <option value="en">English</option>
+      <option value="ja">日本語</option>
+      <option value="zh">中文</option>
+      <option value="es">Español</option>
+    </select>
+  </div>
+</div>
+
+<input id="fileAv" type="file" accept="image/*" multiple style="display:none">
+<input id="fileBg" type="file" accept="image/*" style="display:none">
+
+<script>
+/* ================= i18n ================= */
+const I18N = {
+  en: {
+    toggleHint: 'H to toggle', stepAvatar: 'Avatar', stepMic: 'Mic', stepRec: 'Record', guide1: 'Select your avatar image', guide1sub: 'Tap here or use button <b>1</b><br><b style="color:#8fd8b4">1 image is all you need.</b> Optionally: 2 = lip-sync, 3 = + blink', guide2: 'Enable your microphone', guide2sub: 'Tap here or button <b>2</b>, then allow access',
+    avatar: 'Select avatar', bg: 'Select BG', mic: 'Enable mic', micOn: 'Mic on', micMuted: 'Muted',
+    left: 'L', center: 'Center', right: 'R', flip: 'Flip',
+    size: 'Size', lblAspect: 'Video', landscape: '▭ 16:9', portrait: '▯ 9:16', rec: 'Rec', stop: 'Stop',
+    stStart: 'Drop your avatar image to begin', stImgErr: 'Could not load image',
+    stMicMuted: 'Mic muted — tap to unmute', stMicOn: 'Ready to rec', stMicErr: (m) => 'Please allow microphone access',
+    stNoAv: 'Load an avatar image first',
+    stSaved: 'Saved to your downloads', savedBig: 'Saved!', aspBusy: 'Stop recording before changing orientation',
+  },
+  ja: {
+    toggleHint: 'H で開閉', stepAvatar: '立ち絵', stepMic: 'マイク', stepRec: '録画', guide1: '立ち絵を選んでください', guide1sub: 'ここを押す、または <b>1</b> のボタン<br><b style="color:#8fd8b4">1枚でOK。</b>お好みで 2枚＝口パク / 3枚＝＋まばたき', guide2: 'マイクを認識させてください', guide2sub: 'ここか <b>2</b> のボタンを押して、許可してください',
+    avatar: '立ち絵を選ぶ', bg: '背景を選ぶ', mic: 'マイク認識', micOn: 'マイク認識中', micMuted: 'ミュート中',
+    left: '左', center: '中央', right: '右', flip: '反転',
+    size: '大きさ', lblAspect: '画面', landscape: '▭ 16:9', portrait: '▯ 9:16', rec: '録画', stop: '終了',
+    stStart: '立ち絵をドロップしてください', stImgErr: '画像を読めませんでした',
+    stMicMuted: 'ミュート中（押すと解除）', stMicOn: '録画準備OK', stMicErr: (m) => 'マイクを有効にして下さい',
+    stNoAv: '先に立ち絵を読み込んでください',
+    stSaved: '保存しました（ダウンロードフォルダ）', savedBig: '保存しました！', aspBusy: '録画を止めてから画面の向きを変えてください',
+  },
+  zh: {
+    toggleHint: 'H 开关', stepAvatar: '立绘', stepMic: '麦克风', stepRec: '录制', guide1: '请选择立绘图片', guide1sub: '点这里，或用 <b>1</b> 按钮<br><b style="color:#8fd8b4">1 张就够了。</b>可选: 2 张＝对口型 / 3 张＝＋眨眼', guide2: '请启用麦克风', guide2sub: '点这里或 <b>2</b> 按钮，然后允许使用',
+    avatar: '选择立绘', bg: '选择背景', mic: '启用麦克风', micOn: '识别中', micMuted: '已静音',
+    left: '左', center: '居中', right: '右', flip: '翻转',
+    size: '大小', lblAspect: '画面', landscape: '▭ 16:9', portrait: '▯ 9:16', rec: '录制', stop: '停止',
+    stStart: '请拖入立绘图片', stImgErr: '无法读取图片',
+    stMicMuted: '已静音（点击取消）', stMicOn: '可以录制了', stMicErr: (m) => '请允许使用麦克风',
+    stNoAv: '请先载入立绘图片',
+    stSaved: '已保存到下载文件夹', savedBig: '已保存！', aspBusy: '请先停止录制再切换画面方向',
+  },
+  es: {
+    toggleHint: 'H para alternar', stepAvatar: 'Personaje', stepMic: 'Micro', stepRec: 'Grabar', guide1: 'Elige tu imagen de personaje', guide1sub: 'Toca aquí o usa el botón <b>1</b><br><b style="color:#8fd8b4">Con 1 imagen basta.</b> Opcional: 2 = labios, 3 = + parpadeo', guide2: 'Activa tu micrófono', guide2sub: 'Toca aquí o el botón <b>2</b>, luego permite el acceso',
+    avatar: 'Elegir personaje', bg: 'Elegir fondo', mic: 'Activar micro', micOn: 'Activo', micMuted: 'Silenciado',
+    left: 'Izq', center: 'Centro', right: 'Der', flip: 'Voltear',
+    size: 'Tamaño', lblAspect: 'Vídeo', landscape: '▭ 16:9', portrait: '▯ 9:16', rec: 'Grabar', stop: 'Parar',
+    stStart: 'Suelta la imagen de tu personaje para empezar', stImgErr: 'No se pudo cargar la imagen',
+    stMicMuted: 'Silenciado (toca para activar)', stMicOn: 'Listo para grabar', stMicErr: (m) => 'Activa el micrófono, por favor',
+    stNoAv: 'Carga primero una imagen de personaje',
+    stSaved: 'Guardado en tus descargas', savedBig: '¡Guardado!', aspBusy: 'Detén la grabación antes de cambiar la orientación',
+  },
+};
+
+function detectLang() {
+  const saved = null; // localStorage は artifacts で使えないため未使用
+  const nav = (navigator.language || 'en').toLowerCase();
+  if (nav.startsWith('ja')) return 'ja';
+  if (nav.startsWith('zh')) return 'zh';
+  if (nav.startsWith('es')) return 'es';
+  return 'en';
+}
+
+let LANG = detectLang();
+const t = k => (I18N[LANG][k] !== undefined ? I18N[LANG][k] : I18N.en[k]);
+
+function applyLang() {
+  document.documentElement.lang = LANG;
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const v = t(el.getAttribute('data-i18n'));
+    if (typeof v === 'string') el.innerHTML = v;
+  });
+  // 動的に変わるラベルも貼り直す
+  if (typeof refreshDynamicLabels === 'function') refreshDynamicLabels();
+  if (typeof updateGuide === 'function') updateGuide();
+}
+/* =============== /i18n ================= */
+
+const stage = document.getElementById('stage');
+const guide     = document.getElementById('guide');
+const guideStep = document.getElementById('guideStep');
+const guideMsg  = document.getElementById('guideMsg');
+const guideSub  = document.getElementById('guideSub');
+const st1 = document.getElementById('st1'), st2 = document.getElementById('st2'), st3 = document.getElementById('st3');
+const box1 = document.getElementById('box1'), box2 = document.getElementById('box2'), box3 = document.getElementById('box3');
+const num1 = document.getElementById('num1'), num2 = document.getElementById('num2'), num3 = document.getElementById('num3');
+const panel = document.getElementById('panel');
+const bar   = document.getElementById('bar');
+const mark  = document.getElementById('mark');
+const szEl  = document.getElementById('sz');
+const szVal = document.getElementById('szVal');
+const statusEl = document.getElementById('status');
+const pickAv= document.getElementById('pickAv');
+const pickBg= document.getElementById('pickBg');
+const fileAv= document.getElementById('fileAv');
+const fileBg= document.getElementById('fileBg');
+const micBtn= document.getElementById('mic');
+const posL  = document.getElementById('posL');
+const posC  = document.getElementById('posC');
+const posR  = document.getElementById('posR');
+const recS  = document.getElementById('recStart');
+const recE  = document.getElementById('recStop');
+const savedEl = document.getElementById('saved');
+let savedTimer = null;
+function showSaved() {
+  savedEl.innerHTML = '<span>\u2713 ' + t('savedBig') + '</span>';
+  savedEl.classList.remove('show'); void savedEl.offsetWidth; // reflow で再アニメ
+  savedEl.classList.add('show');
+  clearTimeout(savedTimer);
+  savedTimer = setTimeout(() => savedEl.classList.remove('show'), 1800);
+}
+const cv    = document.getElementById('rec');
+const cx    = cv.getContext('2d');
+const langSel = document.getElementById('langSel');
+const flipB = document.getElementById('flip');
+const aspH  = document.getElementById('aspH');
+const aspV  = document.getElementById('aspV');
+const cdEl  = document.getElementById('cd');
+
+// 言語切り替えで貼り直す必要のある動的ラベルの状態
+let lastLoaded = null;   // 立ち絵を読み込んだか（true/null）
+function refreshDynamicLabels() {
+  // マイクボタン（開始/ミュート/未開始を反映）
+  if (typeof refreshMicBtn === 'function') refreshMicBtn();
+  // 録画中はステータス(RECバッジ)を保持して上書きしない
+  if (typeof recorder !== 'undefined' && recorder) return;
+  // ステータス行: 読み込み済みは空、未読込はドロップ案内（マイク中はその表示を維持）
+  if (typeof running !== 'undefined' && running) {
+    if (micMuted) statusEl.textContent = t('stMicMuted');
+    else statusEl.innerHTML = '<span style="color:#e06060;font-weight:bold">' + t('stMicOn') + '</span>';
+  }
+  else if (lastLoaded) statusEl.textContent = '';
+  else statusEl.textContent = t('stStart');
+}
+
+/* ---------- 画像 ----------
+   1枚 → 跳ねる / 2枚 → 口パク / 3枚 → + まばたき
+--------------------------------- */
+let imgs = [];        // [閉じ口, 開き口, 目つぶり]
+let bounceMode = true;
+let bgImg = null, bgReady = false, bgOn = false;
+
+function pickOrder(files) {
+  const arr = [...files];
+  const by = k => arr.find(f => f.name.toLowerCase().includes(k));
+  const c = by('close'), o = by('open'), b = by('blink');
+  if (c || o || b) {
+    const rest = arr.filter(f => f !== c && f !== o && f !== b);
+    return [c || rest.shift(), o || rest.shift(), b || rest.shift()].filter(Boolean);
+  }
+  return arr.slice(0, 3);
+}
+
+function loadImage(file) {
+  return new Promise((res, rej) => {
+    const im = new Image();
+    im.onload = () => res(im);
+    im.onerror = rej;
+    im.src = URL.createObjectURL(file);
+  });
+}
+
+async function setAvatars(files) {
+  const list = pickOrder([...files].filter(f => f.type.startsWith('image/')));
+  if (!list.length) return;
+  try {
+    imgs = await Promise.all(list.map(loadImage));
+  } catch (e) {
+    statusEl.textContent = t('stImgErr');
+    return;
+  }
+  bounceMode = imgs.length < 2;
+  applySize();
+  updateGuide();
+  lastLoaded = true;              // 立ち絵を読み込んだ、という記録だけ残す
+  statusEl.textContent = '';      // 「N枚 読込/モード」は出さない（プレビューで分かる）
+}
+
+async function setBackground(file) {
+  if (!file) return;
+  const im = await loadImage(file);
+  bgImg = im; bgReady = true; bgOn = true;
+  paintToggle(pickBg, true);
+}
+
+pickAv.addEventListener('click', () => fileAv.click());
+
+// 背景ボタン: 表示中なら消す / 非表示・未設定ならファイル選択（＝間違えても選び直せる。F5不要）
+pickBg.addEventListener('click', () => {
+  if (bgOn) { bgOn = false; paintToggle(pickBg, false); }  // 表示中 → 背景を消す
+  else { fileBg.value = ''; fileBg.click(); }               // 非表示/未設定 → 選び直し
+});
+fileAv.addEventListener('change', () => setAvatars(fileAv.files));
+fileBg.addEventListener('change', () => setBackground(fileBg.files[0]));
+
+/* ドラッグ＆ドロップ（案内は #guide が常時出すのでハイライトは不要） */
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('drop', e => {
+  e.preventDefault();
+  if (e.dataTransfer.files.length) setAvatars(e.dataTransfer.files);
+});
+
+/* ---------- 中央ガイド（今やることを1つだけ大きく出す）----------
+   状態1: 立ち絵がまだ → 「① 立ち絵を選んでください」
+   状態2: 立ち絵はある/マイク未認識 → 「② マイクを認識させてください」
+   状態3: 両方そろった → ガイドを消す（あとは録画するだけ）
+------------------------------------------------------------------ */
+let guideAction = null;   // 今のカードを押したときに実行する処理
+
+function paintSteps() {
+  // done: 済み(緑✓) / active: 今光る / '' : これから
+  const hasAv = imgs.length > 0;
+  const hasMic = running;
+  const set = (stEl, numEl, state) => {
+    stEl.classList.remove('done', 'active');
+    numEl.classList.remove('done', 'dim');
+    if (state === 'done') {
+      stEl.classList.add('done'); stEl.querySelector('i').textContent = '\u2713';
+      numEl.classList.add('done'); numEl.textContent = '\u2713';
+    } else {
+      stEl.querySelector('i').textContent = stEl.id.slice(-1);
+      numEl.textContent = numEl.id.slice(-1);
+      if (state === 'active') { stEl.classList.add('active'); }
+      else { numEl.classList.add('dim'); }
+    }
+  };
+  set(st1, num1, hasAv ? 'done' : 'active');
+  set(st2, num2, hasMic ? 'done' : hasAv ? 'active' : 'todo');
+  set(st3, num3, (hasAv && hasMic) ? 'active' : 'todo');
+  // ③ 録画は 立ち絵＋マイク が揃うまで押せない（間違い防止）
+  if (!recorder) recS.disabled = !(hasAv && hasMic);
+
+  // 「今やるボタン」だけを紫(.go)にして光らせる。済んだら外す。
+  pickAv.classList.toggle('go', !hasAv);                          // ① 立ち絵がまだ
+  micBtn.classList.toggle('go', hasAv && !hasMic);                // ② 立ち絵OK・マイクまだ
+  recS.classList.toggle('go', hasAv && hasMic && !recorder);      // ③ 両方OK・録画前
+
+  // 箱も 今やる=active(紫枠) / 済み=done(緑枠) にする
+  const box = (el, done, active) => {
+    el.classList.toggle('done', done);
+    el.classList.toggle('active', active);
+  };
+  box(box1, hasAv, !hasAv);
+  box(box2, hasMic, hasAv && !hasMic);
+  box(box3, false, hasAv && hasMic && !recorder);
+}
+
+function updateGuide() {
+  paintSteps();
+  if (!imgs.length) {
+    guideStep.textContent = '1';
+    guideMsg.innerHTML = t('guide1');
+    guideSub.innerHTML = t('guide1sub');
+    guideAction = () => fileAv.click();
+    guide.classList.add('show');
+  } else if (!running) {
+    guideStep.textContent = '2';
+    guideMsg.innerHTML = t('guide2');
+    guideSub.innerHTML = t('guide2sub');
+    guideAction = () => enableMic();
+    guide.classList.add('show');
+  } else {
+    guideAction = null;
+    guide.classList.remove('show');
+  }
+}
+// カード全体を押したら、その段階の操作を実行（中央でそのままアップロード/マイク許可）
+guide.addEventListener('click', () => { if (guideAction) guideAction(); });
+
+/* ---------- 位置と大きさ ---------- */
+let posX = 0.5;      // 0=左端, 0.5=中央, 1=右端（横位置）
+let sizePct = 85;    // 立ち絵の高さ（キャンバス高さに対する%）。ドラッグで変える
+
+function paintToggle(btn, on) {
+  btn.classList.toggle('on', on);
+  btn.classList.toggle('off', !on);
+}
+function paintPosButtons() {
+  // どのプリセット位置に近いかでボタンを点灯（ドラッグで中間なら全部消灯）
+  paintToggle(posL, Math.abs(posX - 0)   < 0.02);
+  paintToggle(posC, Math.abs(posX - 0.5) < 0.02);
+  paintToggle(posR, Math.abs(posX - 1)   < 0.02);
+}
+function setPosX(v) {
+  posX = Math.max(0, Math.min(1, v));
+  paintPosButtons();
+}
+function setSize(v) {
+  sizePct = Math.max(20, Math.min(100, Math.round(v)));
+  if (szEl) szEl.value = sizePct;
+  if (szVal) szVal.textContent = sizePct;
+}
+posL.onclick = () => setPosX(0);
+posC.onclick = () => setPosX(0.5);
+posR.onclick = () => setPosX(1);
+function applySize() { /* サイズは drawFrame 内で sizePct を使う */ }
+paintPosButtons();
+
+addEventListener('keydown', e => {
+  if (e.key.toLowerCase() === 'h') panel.classList.toggle('hidden');
+});
+
+langSel.value = LANG;
+langSel.addEventListener('change', () => { LANG = langSel.value; applyLang(); });
+
+/* ---------- マイクと口 ---------- */
+let ctx = null, analyser = null, buf = null, recDest = null, running = false;
+let micGain = null, micMuted = false;   // ② マイクのミュート用（gain=0 で口判定も録音も一括で無音化）
+const threshold = 0.04;   // 口が開くしきい値（固定。感度スライダーは廃止）
+let isOpen = false, blinking = false, level = 0;
+
+let uiScale = 1.45;  // 既定（右上グリップで 0.7〜2.2 に調整可）
+function setScale(v) {
+  uiScale = Math.max(0.7, Math.min(2.2, v));
+  document.documentElement.style.setProperty('--uiScale', uiScale.toFixed(3));
+}
+setScale(uiScale);
+
+// 右上角をドラッグしてパネルを拡大縮小（上・右に引くほど大きく）
+(function () {
+  const grip = document.getElementById('grip');
+  if (!grip) return;
+  let sx = 0, sy = 0, s0 = 1;
+  const BASE = 222;
+
+  function down(e) {
+    e.preventDefault();
+    const p = e.touches ? e.touches[0] : e;
+    sx = p.clientX; sy = p.clientY; s0 = uiScale;
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+    window.addEventListener('touchmove', move, { passive: false });
+    window.addEventListener('touchend', up);
+  }
+  function move(e) {
+    e.preventDefault();
+    const p = e.touches ? e.touches[0] : e;
+    // 右へ＋上へ動かすと拡大。1px あたり基準幅に対する割合で効かせる
+    const dx =  (p.clientX - sx);
+    const dy = -(p.clientY - sy);
+    setScale(s0 + (dx + dy) / (BASE * 1.4));
+  }
+  function up() {
+    window.removeEventListener('mousemove', move);
+    window.removeEventListener('mouseup', up);
+    window.removeEventListener('touchmove', move);
+    window.removeEventListener('touchend', up);
+  }
+  grip.addEventListener('mousedown', down);
+  grip.addEventListener('touchstart', down, { passive: false });
+})();
+
+let flipped = false;
+flipB.addEventListener('click', () => {
+  flipped = !flipped;
+  paintToggle(flipB, flipped);
+});
+
+let isVertical = false;
+function setAspect(vertical) {
+  // 録画を回している最中は変えない（途中でサイズが変わると壊れる）
+  if (recorder) { statusEl.textContent = t('aspBusy'); return; }
+  isVertical = vertical;
+  // canvas のサイズを変えるだけ。canvas 自体がプレビューなので、
+  // 縦にすれば画面のプレビューもそのまま縦になる（枠オーバーレイは不要）。
+  if (vertical) { cv.width = 720; cv.height = 1280; }
+  else          { cv.width = 1280; cv.height = 720; }
+  paintToggle(aspH, !vertical);
+  paintToggle(aspV, vertical);
+}
+aspH.addEventListener('click', () => setAspect(false));
+aspV.addEventListener('click', () => setAspect(true));
+
+const denoise = true;   // ノイズ抑制は常時オン（トグル廃止）
+
+// 大きさスライダー（ドラッグでも変わるが、確実に分かる手段として残す）
+szEl.addEventListener('input', () => {
+  setSize(parseInt(szEl.value, 10));
+});
+
+// 起動時にメーターのしきい値ラインを固定位置に置く
+mark.style.left = Math.min(100, threshold * 500) + '%';
+
+function paintMouth() {
+  /* 立ち絵の切り替えは drawFrame が毎フレーム判断して描くので、ここは何もしない。
+     口・まばたきの状態(isOpen / blinking)を更新するだけでプレビューに反映される。 */
+}
+
+const HOLD = 4;
+let hold = 0;
+
+function tick() {
+  analyser.getFloatTimeDomainData(buf);
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+  const rms = Math.sqrt(sum / buf.length);
+  level = rms;
+  bar.style.width = Math.min(100, rms * 500) + '%';
+  bar.classList.toggle('over', rms > threshold);
+
+  const on = rms > threshold;
+  if (on) { hold = HOLD; }
+  else if (hold > 0) { hold--; }
+  const open = on || hold > 0;
+  if (open !== isOpen) {
+    isOpen = open;
+    // 瞬きの最中に喋り始めたら瞬きを打ち切る（口を優先）
+    if (open && blinking) endBlink(); else paintMouth();
+  }
+
+  // 跳ねはやめた。上下の揺れは呼吸(CSS breathe)に任せる。
+  requestAnimationFrame(tick);
+}
+
+async function enableMic() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: denoise, noiseSuppression: denoise, autoGainControl: denoise }
+    });
+    if (!ctx) {
+      ctx = new AudioContext();
+      analyser = ctx.createAnalyser();
+      analyser.fftSize = 512;
+      buf = new Float32Array(analyser.fftSize);
+      recDest = ctx.createMediaStreamDestination();
+      micGain = ctx.createGain();
+      micGain.connect(analyser);   // 口の判定
+      micGain.connect(recDest);    // 録画に入れる（スピーカーには繋がない＝ハウリング防止）
+    }
+    await ctx.resume();
+    const src = ctx.createMediaStreamSource(stream);
+    src.connect(micGain);          // マイク音は必ず micGain 経由 → ミュートで一括0
+    micMuted = false;
+    micGain.gain.value = 1;
+    if (!running) { running = true; tick(); }
+    refreshMicBtn();
+    statusEl.innerHTML = '<span style="color:#e06060;font-weight:bold">' + t('stMicOn') + '</span>';
+    updateGuide();
+  } catch (err) {
+    statusEl.textContent = t('stMicErr')(err.message);
+  }
+}
+function refreshMicBtn() {
+  const active = running && !micMuted;
+  const icon = (running && micMuted) ? '&#128263;' : '&#127908;'; // 🔇 / 🎤
+  const key  = !running ? 'mic' : (micMuted ? 'micMuted' : 'micOn');
+  micBtn.innerHTML = '<span class="ic">' + icon + '</span>' + t(key);
+  micBtn.classList.toggle('on', active);        // 認識中=緑点 / 未開始・ミュートは消灯
+  micBtn.classList.toggle('micoff', running && micMuted);
+}
+function toggleMic() {
+  if (!running) { enableMic(); return; }   // 未開始なら開始
+  micMuted = !micMuted;                     // 開始済みなら ミュート⇄解除
+  if (micGain) micGain.gain.value = micMuted ? 0 : 1;
+  refreshMicBtn();
+  if (micMuted) statusEl.textContent = t('stMicMuted');
+  else statusEl.innerHTML = '<span style="color:#e06060;font-weight:bold">' + t('stMicOn') + '</span>';
+}
+micBtn.addEventListener('click', toggleMic);
+
+/* まばたき（3枚あるときだけ）
+   3枚では「目を閉じて口を開けている」が作れないので口を優先する。
+     ・口が開いている間は瞬きを始めない
+     ・瞬きの最中に喋り始めたら即座に終える */
+let blinkTimer = null;
+
+function endBlink() {
+  clearTimeout(blinkTimer);
+  blinking = false;
+  paintMouth();
+  scheduleBlink();
+}
+
+function scheduleBlink(delay) {
+  clearTimeout(blinkTimer);
+  blinkTimer = setTimeout(() => {
+    if (!imgs[2] || bounceMode) { scheduleBlink(); return; }
+    if (isOpen) { scheduleBlink(400); return; }
+    blinking = true;
+    paintMouth();
+    blinkTimer = setTimeout(endBlink, 120);
+  }, delay != null ? delay : 2000 + Math.random() * 4000);
+}
+
+scheduleBlink();
+
+/* ---------- 立ち絵をドラッグで操作 ----------
+   ・本体をドラッグ → 左右移動（posX を変える）
+   ・四隅をドラッグ → 拡縮（sizePct を変える）
+   ・マウスホイール → 拡縮（PC 向け）
+   ・2本指ピンチ → 拡縮（モバイル向け）
+   canvas がプレビュー本体なので、画面座標を canvas 座標へ比率変換して判定する。
+------------------------------------------------- */
+(function () {
+  function avatarRect() {
+    const im = imgs.length ? imgs[0] : null;
+    if (!im || !im.naturalWidth) return null;
+    const W = cv.width, H = cv.height;
+    const base = isVertical
+      ? (H * (sizePct / 100) / im.naturalHeight)                                   // 縦: 高さ基準で拡大（幅ははみ出しOK＝100%まで届く）
+      : Math.min(W * 0.9 / im.naturalWidth, H * (sizePct / 100) / im.naturalHeight); // 横: 従来通り（枠内に収める）
+    const w = im.naturalWidth * base, h = im.naturalHeight * base;
+    const x = (W - w) * posX;
+    const y = H - h;
+    return { x, y, w, h };
+  }
+  function toCanvas(clientX, clientY) {
+    const r = cv.getBoundingClientRect();
+    return {
+      x: (clientX - r.left) / r.width * cv.width,
+      y: (clientY - r.top) / r.height * cv.height
+    };
+  }
+  const CORNER = 90;
+  let mode = null, start = null;
+
+  function hitTest(cx0, cy0) {
+    const R = avatarRect();
+    if (!R) return null;
+    const corners = [
+      [R.x, R.y], [R.x + R.w, R.y],
+      [R.x, R.y + R.h], [R.x + R.w, R.y + R.h]
+    ];
+    for (const [cxp, cyp] of corners) {
+      if (Math.abs(cx0 - cxp) < CORNER && Math.abs(cy0 - cyp) < CORNER) return 'resize';
+    }
+    if (cx0 >= R.x && cx0 <= R.x + R.w && cy0 >= R.y && cy0 <= R.y + R.h) return 'move';
+    return null;
+  }
+
+  function pointerDown(e) {
+    if (!imgs.length) return;
+    if (e.touches && e.touches.length >= 2) return; // ピンチは別ハンドラ
+    const p = e.touches ? e.touches[0] : e;
+    const c = toCanvas(p.clientX, p.clientY);
+    const hit = hitTest(c.x, c.y);
+    if (!hit) return;
+    e.preventDefault();
+    mode = hit;
+    start = { cx: c.x, cy: c.y, posX, sizePct };
+    window.addEventListener('mousemove', pointerMove);
+    window.addEventListener('mouseup', pointerUp);
+    window.addEventListener('touchmove', pointerMove, { passive: false });
+    window.addEventListener('touchend', pointerUp);
+  }
+  function pointerMove(e) {
+    if (!mode) return;
+    if (e.touches && e.touches.length >= 2) return;
+    const p = e.touches ? e.touches[0] : e;
+    const c = toCanvas(p.clientX, p.clientY);
+    e.preventDefault();
+    if (mode === 'move') {
+      const R = avatarRect();
+      const span = cv.width - (R ? R.w : 0);
+      if (span > 0) setPosX(start.posX + (c.x - start.cx) / span);
+    } else if (mode === 'resize') {
+      const d = (c.y - start.cy) + (c.x - start.cx);
+      setSize(start.sizePct + d / cv.height * 100);
+    }
+  }
+  function pointerUp() {
+    mode = null;
+    window.removeEventListener('mousemove', pointerMove);
+    window.removeEventListener('mouseup', pointerUp);
+    window.removeEventListener('touchmove', pointerMove);
+    window.removeEventListener('touchend', pointerUp);
+  }
+  cv.addEventListener('mousedown', pointerDown);
+  cv.addEventListener('touchstart', pointerDown, { passive: false });
+
+  cv.addEventListener('wheel', e => {
+    if (!imgs.length) return;
+    e.preventDefault();
+    setSize(sizePct + (e.deltaY < 0 ? 2 : -2));
+  }, { passive: false });
+
+  let pinch0 = null;
+  function dist(t) {
+    return Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  }
+  cv.addEventListener('touchstart', e => {
+    if (e.touches.length === 2) pinch0 = { d: dist(e.touches), s: sizePct };
+  }, { passive: false });
+  cv.addEventListener('touchmove', e => {
+    if (e.touches.length === 2 && pinch0) {
+      e.preventDefault();
+      setSize(pinch0.s * (dist(e.touches) / pinch0.d));
+    }
+  }, { passive: false });
+  cv.addEventListener('touchend', e => {
+    if (e.touches.length < 2) pinch0 = null;
+  });
+})();
+
+const BREATHE_MS = 3500;
+let recorder = null, chunks = [];
+
+function drawFrame() {
+  const W = cv.width, H = cv.height;
+  cx.clearRect(0, 0, W, H);
+
+  if (bgOn && bgReady && bgImg) {
+    const s = Math.max(W / bgImg.naturalWidth, H / bgImg.naturalHeight);
+    const w = bgImg.naturalWidth * s, h = bgImg.naturalHeight * s;
+    cx.drawImage(bgImg, (W - w) / 2, (H - h) / 2, w, h);
+  }
+  // 背景なし = 透明のまま録る（黒で埋めない）
+
+  const im = imgs.length
+    ? (bounceMode ? imgs[0] : (blinking && imgs[2]) ? imgs[2] : (isOpen && imgs[1]) ? imgs[1] : imgs[0])
+    : null;
+
+  if (im && im.naturalWidth) {
+    const p = (1 - Math.cos(performance.now() / BREATHE_MS * Math.PI * 2)) / 2;  // 0..1
+    const base = isVertical
+      ? (H * (sizePct / 100) / im.naturalHeight)                                   // 縦: 高さ基準で拡大（幅ははみ出しOK＝100%まで届く）
+      : Math.min(W * 0.9 / im.naturalWidth, H * (sizePct / 100) / im.naturalHeight); // 横: 従来通り（枠内に収める）
+    const w = im.naturalWidth * base;
+    // 呼吸: 下端を軸に上へ伸縮させる（足元は常に接地）。全身を持ち上げないので下に隙間ができない
+    const h = im.naturalHeight * base * (1 + 0.018 * p);
+    // posX(0..1) を「左端〜右端」に写像。立ち絵の幅ぶんを引いて枠内に収める
+    const x = (W - w) * posX;
+    const y = H - h;   // 下端を枠の底に固定 → 上下に動いても下に隙間ができない
+    if (flipped) {
+      cx.save();
+      cx.translate(x + w, y);
+      cx.scale(-1, 1);
+      cx.drawImage(im, 0, 0, w, h);
+      cx.restore();
+    } else {
+      cx.drawImage(im, x, y, w, h);
+    }
+  }
+  requestAnimationFrame(drawFrame);
+}
+
+function pickMime() {
+  // 音声が確実に含まれる組み合わせを優先する。
+  // Chrome では canvas 映像 + WebAudio 音声を混ぜたとき、
+  // codecs 指定なしだと音声が落ちることがあるので必ず opus を明示する。
+  for (const m of [
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm;codecs=h264,opus',
+    'video/webm'
+  ]) if (MediaRecorder.isTypeSupported(m)) return m;
+  return '';
+}
+
+// 録画中（＋カウントダウン中）は「終了」以外のボタンを無効化して誤操作を防ぐ
+function setRecLock(on) {
+  [pickAv, pickBg, posL, posC, posR, flipB, micBtn, aspH, aspV, szEl, langSel, recS]
+    .forEach(el => { if (el) el.disabled = on; });
+  if (on) recS.classList.remove('go');   // 録画中は録画ボタンの紫グローを消す
+}
+
+function beginRecordNow() {
+
+  const tracks = [...cv.captureStream(30).getVideoTracks()];
+  let aCount = 0;
+  if (recDest) {
+    const at = recDest.stream.getAudioTracks();
+    aCount = at.length;
+    tracks.push(...at);
+  }
+  const mime = pickMime();
+  const opt = mime ? { mimeType: mime } : {};
+  opt.videoBitsPerSecond = 3500000;
+  opt.audioBitsPerSecond = 128000;
+
+  // 診断: 音声トラック数とコーデックを出す。無音問題の切り分け用。
+  console.log('[rec] audioTracks=', aCount, 'mime=', mime, 'ctx.state=', ctx && ctx.state);
+
+  chunks = [];
+  recorder = new MediaRecorder(new MediaStream(tracks), opt);
+  recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  recorder.onstop = () => {
+    const blob = new Blob(chunks, { type: recorder.mimeType });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    const d = new Date(), p = n => String(n).padStart(2, '0');
+    a.download = d.getFullYear() + '-' + p(d.getMonth()+1) + '-' + p(d.getDate()) +
+                 '_' + p(d.getHours()) + '-' + p(d.getMinutes()) + '-' + p(d.getSeconds()) + '.webm';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    statusEl.textContent = t('stSaved');
+    showSaved();
+    recorder = null;
+    setRecLock(false);           // 全ボタンを再有効化
+    recE.disabled = true;
+    updateGuide();               // 録画ボタンの紫グロー等を正しい状態に戻す
+  };
+  recorder.start(1000);
+  statusEl.innerHTML = '<span class="reclive"><span class="dot"></span>REC</span>';
+  recS.disabled = true; recE.disabled = false;
+}
+
+function runCountdown(n, done) {
+  cdEl.classList.add('show');
+  cdEl.textContent = n;
+  const step = () => {
+    n -= 1;
+    if (n <= 0) { cdEl.classList.remove('show'); done(); return; }
+    cdEl.textContent = n;
+    setTimeout(step, 1000);
+  };
+  setTimeout(step, 1000);
+}
+
+recS.addEventListener('click', () => {
+  if (!imgs.length) { statusEl.textContent = t('stNoAv'); return; }
+  setRecLock(true);                 // 終了以外を無効化（カウントダウン中から）
+  runCountdown(2, beginRecordNow);  // 2,1 のみ（3は長い）
+});
+
+recE.addEventListener('click', () => {
+  if (recorder && recorder.state !== 'inactive') recorder.stop();
+});
+
+/* 初期化: 言語を反映して初期ステータスを出す */
+applyLang();
+statusEl.textContent = t('stStart');
+
+/* プレビュー用の描画ループを起動（録画とは無関係に常時回す）。
+   これで「画面に見えているもの＝録画されるもの」になる。 */
+drawFrame();
+
+/* 中央ガイドを初期表示（まず「立ち絵を選んで」） */
+updateGuide();
+
+</script>
