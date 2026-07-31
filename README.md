@@ -8,6 +8,12 @@ A single-HTML VTuber recorder that runs entirely in your browser.
   <img src="screenshot.png" width="300">
 </p>
 
+<p align="left">
+  <a href="https://ayamestudio.github.io/recdoor-lite/mobile.html">📱 Mobile Demo</a>
+  &nbsp;|&nbsp;
+  <a href="https://ayamestudio.github.io/recdoor-lite/desktop.html">💻 Desktop Demo</a>
+</p>
+
 ---
 
 ## Why Recdoor Lite
