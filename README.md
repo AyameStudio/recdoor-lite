@@ -154,4 +154,4 @@ Este software es gratuito. Puedes modificarlo, redistribuirlo y usarlo comercial
 
 ---
 
-<p align="center">Made with Recdoor🌸 — 2026</p>
+<p align="center">Made with <a href="https://recdoor.com/">Recdoor</a>🌸 — 2026</p>
